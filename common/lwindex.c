@@ -2007,6 +2007,14 @@ static char *create_lwi_path
         return buf;
     }
 
+#ifdef _WIN32
+    if ( !strcmp(opt->cache_dir, ":") ) {
+        char *buf = lw_malloc_zero ( strlen( opt->file_path ) + 5 );
+        sprintf( buf, "%s:lwi", opt->file_path );
+        return buf;
+    }
+#endif
+
     const int max_filename = 254; // be conservative
     const char *dir = opt->cache_dir ? opt->cache_dir : ".";
     const char *rpath = lw_realpath( opt->file_path, NULL );
