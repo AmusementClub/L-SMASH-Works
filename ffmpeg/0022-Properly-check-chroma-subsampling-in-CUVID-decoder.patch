@@ -1,0 +1,80 @@
+From 001d0b6683e9052d3fff54b344f63a676a9ff9ae Mon Sep 17 00:00:00 2001
+From: Holy Wu <holywu@gmail.com>
+Date: Mon, 17 May 2021 10:37:05 +0800
+Subject: [PATCH 2/4] Properly check chroma subsampling in CUVID decoder
+
+---
+ libavcodec/cuviddec.c | 23 ++++++++++++++---------
+ 1 file changed, 14 insertions(+), 9 deletions(-)
+
+diff --git a/libavcodec/cuviddec.c b/libavcodec/cuviddec.c
+index ec57afdefe..b4243d52a4 100644
+--- a/libavcodec/cuviddec.c
++++ b/libavcodec/cuviddec.c
+@@ -713,6 +713,7 @@ static av_cold int cuvid_decode_end(AVCodecContext *avctx)
+ 
+ static int cuvid_test_capabilities(AVCodecContext *avctx,
+                                    const CUVIDPARSERPARAMS *cuparseinfo,
++                                   cudaVideoChromaFormat probed_chroma_format,
+                                    int probed_width,
+                                    int probed_height,
+                                    int bit_depth)
+@@ -739,7 +740,7 @@ static int cuvid_test_capabilities(AVCodecContext *avctx,
+     ctx->caps8.eCodecType = ctx->caps10.eCodecType = ctx->caps12.eCodecType
+         = cuparseinfo->CodecType;
+     ctx->caps8.eChromaFormat = ctx->caps10.eChromaFormat = ctx->caps12.eChromaFormat
+-        = cudaVideoChromaFormat_420;
++        = probed_chroma_format;
+ 
+     ctx->caps8.nBitDepthMinus8 = 0;
+     ctx->caps10.nBitDepthMinus8 = 2;
+@@ -774,13 +775,8 @@ static int cuvid_test_capabilities(AVCodecContext *avctx,
+             return res8;
+     }
+ 
+-    if (!ctx->caps8.bIsSupported) {
+-        av_log(avctx, AV_LOG_ERROR, "Codec %s is not supported.\n", avctx->codec->name);
+-        return AVERROR(EINVAL);
+-    }
+-
+     if (!caps->bIsSupported) {
+-        av_log(avctx, AV_LOG_ERROR, "Bit depth %d is not supported.\n", bit_depth);
++        av_log(avctx, AV_LOG_ERROR, "Hardware is lacking required capabilities\n");
+         return AVERROR(EINVAL);
+     }
+ 
+@@ -822,13 +818,21 @@ static av_cold int cuvid_decode_init(AVCodecContext *avctx)
+                                        AV_PIX_FMT_NV12,
+                                        AV_PIX_FMT_NONE };
+ 
++    cudaVideoChromaFormat probed_chroma_format = cudaVideoChromaFormat_420;
+     int probed_width = avctx->coded_width ? avctx->coded_width : 1280;
+     int probed_height = avctx->coded_height ? avctx->coded_height : 720;
+     int probed_bit_depth = 8;
+ 
+     const AVPixFmtDescriptor *probe_desc = av_pix_fmt_desc_get(avctx->pix_fmt);
+-    if (probe_desc && probe_desc->nb_components)
+-        probed_bit_depth = probe_desc->comp[0].depth;
++    if (probe_desc) {
++        if (probe_desc->log2_chroma_w == 1 && probe_desc->log2_chroma_h == 0)
++            probed_chroma_format = cudaVideoChromaFormat_422;
++        else if (probe_desc->log2_chroma_w == 0 && probe_desc->log2_chroma_h == 0)
++            probed_chroma_format = cudaVideoChromaFormat_444;
++
++        if (probe_desc->nb_components)
++            probed_bit_depth = probe_desc->comp[0].depth;
++    }
+ 
+     // Accelerated transcoding scenarios with 'ffmpeg' require that the
+     // pix_fmt be set to AV_PIX_FMT_CUDA early. The sw_pix_fmt, and the
+@@ -1010,6 +1014,7 @@ static av_cold int cuvid_decode_init(AVCodecContext *avctx)
+         goto error;
+ 
+     ret = cuvid_test_capabilities(avctx, &ctx->cuparseinfo,
++                                  probed_chroma_format,
+                                   probed_width,
+                                   probed_height,
+                                   probed_bit_depth);
+-- 
+2.30.1.windows.1
+

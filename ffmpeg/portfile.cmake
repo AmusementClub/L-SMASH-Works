@@ -144,6 +144,10 @@ vcpkg_from_github(
         0014-avfilter-dependency-fix.patch  # http://ffmpeg.org/pipermail/ffmpeg-devel/2021-February/275819.html
         0015-Fix-xml2-detection.patch
         0016-configure-dnn-needs-avformat.patch  # http://ffmpeg.org/pipermail/ffmpeg-devel/2021-May/279926.html
+        0021-MPEG-2-Video.patch
+        0022-Properly-check-chroma-subsampling-in-CUVID-decoder.patch
+        0023-Revert-avcodec-h264_parser-set-missing-pts-for-top-b.patch
+        0024-Revert-vc-1-Optimise-parser-with-special-attention-t.patch
         ${PATCHES}
 )
 

@@ -1,0 +1,184 @@
+From b0a04d3b1e3ef4cae7fc34e42bf042c013829218 Mon Sep 17 00:00:00 2001
+From: Holy Wu <holywu@gmail.com>
+Date: Mon, 17 May 2021 10:30:16 +0800
+Subject: [PATCH 1/4] MPEG-2 Video
+
+Based on https://gist.github.com/maki-rxrz/5a7a2c789e4369fa34853b5358fb8a29, adapted for FFmpeg 4.4.
+---
+ libavcodec/avcodec.c          |  4 ++--
+ libavcodec/avcodec.h          |  7 +++++++
+ libavcodec/codec_par.c        |  2 ++
+ libavcodec/codec_par.h        |  5 +++++
+ libavcodec/mpegvideo_parser.c | 23 +++++++++++++++++++----
+ libavformat/utils.c           | 11 +++++++++--
+ 6 files changed, 44 insertions(+), 8 deletions(-)
+
+diff --git a/libavcodec/avcodec.c b/libavcodec/avcodec.c
+index e572e9533d..cca74500a0 100644
+--- a/libavcodec/avcodec.c
++++ b/libavcodec/avcodec.c
+@@ -720,9 +720,9 @@ void avcodec_string(char *buf, int buf_size, AVCodecContext *enc, int encode)
+             if (enc->field_order != AV_FIELD_UNKNOWN) {
+                 const char *field_order = "progressive";
+                 if (enc->field_order == AV_FIELD_TT)
+-                    field_order = "top first";
++                    field_order = enc->progressive_frame ? "progressive (tff)" : "top first";
+                 else if (enc->field_order == AV_FIELD_BB)
+-                    field_order = "bottom first";
++                    field_order = enc->progressive_frame ? "progressive (bff)" : "bottom first";
+                 else if (enc->field_order == AV_FIELD_TB)
+                     field_order = "top coded first (swapped)";
+                 else if (enc->field_order == AV_FIELD_BT)
+diff --git a/libavcodec/avcodec.h b/libavcodec/avcodec.h
+index 8a71c04230..77db4ad3d7 100644
+--- a/libavcodec/avcodec.h
++++ b/libavcodec/avcodec.h
+@@ -1192,6 +1192,13 @@ typedef struct AVCodecContext {
+      */
+     enum AVFieldOrder field_order;
+ 
++    /**
++     * Progressive frame flag.
++     * - encoding: unused
++     * - decoding: Set by libavcodec
++     */
++    int progressive_frame;
++
+     /* audio only */
+     int sample_rate; ///< samples per second
+     int channels;    ///< number of audio channels
+diff --git a/libavcodec/codec_par.c b/libavcodec/codec_par.c
+index 1a5168a04b..af65c23517 100644
+--- a/libavcodec/codec_par.c
++++ b/libavcodec/codec_par.c
+@@ -108,6 +108,7 @@ int avcodec_parameters_from_context(AVCodecParameters *par,
+         par->width               = codec->width;
+         par->height              = codec->height;
+         par->field_order         = codec->field_order;
++        par->progressive_frame   = codec->progressive_frame;
+         par->color_range         = codec->color_range;
+         par->color_primaries     = codec->color_primaries;
+         par->color_trc           = codec->color_trc;
+@@ -163,6 +164,7 @@ int avcodec_parameters_to_context(AVCodecContext *codec,
+         codec->width                  = par->width;
+         codec->height                 = par->height;
+         codec->field_order            = par->field_order;
++        codec->progressive_frame      = par->progressive_frame;
+         codec->color_range            = par->color_range;
+         codec->color_primaries        = par->color_primaries;
+         codec->color_trc              = par->color_trc;
+diff --git a/libavcodec/codec_par.h b/libavcodec/codec_par.h
+index 948758e237..38f8871972 100644
+--- a/libavcodec/codec_par.h
++++ b/libavcodec/codec_par.h
+@@ -140,6 +140,11 @@ typedef struct AVCodecParameters {
+      */
+     enum AVFieldOrder                  field_order;
+ 
++    /**
++     * Video only. Progressive frame flag.
++     */
++    int progressive_frame;
++
+     /**
+      * Video only. Additional colorspace characteristics.
+      */
+diff --git a/libavcodec/mpegvideo_parser.c b/libavcodec/mpegvideo_parser.c
+index c02cd7f92f..d8cdb76d0c 100644
+--- a/libavcodec/mpegvideo_parser.c
++++ b/libavcodec/mpegvideo_parser.c
+@@ -41,7 +41,7 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
+     uint32_t start_code;
+     int frame_rate_index, ext_type, bytes_left;
+     int frame_rate_ext_n, frame_rate_ext_d;
+-    int top_field_first, repeat_first_field, progressive_frame;
++    int picture_structure, top_field_first, repeat_first_field;
+     int horiz_size_ext, vert_size_ext, bit_rate_ext;
+     int did_set_size=0;
+     int set_dim_ret = 0;
+@@ -51,6 +51,7 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
+     enum AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
+ //FIXME replace the crap with get_bits()
+     s->repeat_pict = 0;
++    s->picture_structure = AV_PICTURE_STRUCTURE_UNKNOWN;
+ 
+     while (buf < buf_end) {
+         start_code= -1;
+@@ -59,6 +60,7 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
+         switch(start_code) {
+         case PICTURE_START_CODE:
+             if (bytes_left >= 2) {
++                s->output_picture_number = (buf[0] << 2) | (buf[1] >> 6);
+                 s->pict_type = (buf[1] >> 3) & 7;
+                 if (bytes_left >= 4)
+                     vbv_delay = ((buf[1] & 0x07) << 13) | (buf[2] << 5) | (buf[3] >> 3);
+@@ -114,9 +116,10 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
+                     break;
+                 case 0x8: /* picture coding extension */
+                     if (bytes_left >= 5) {
++                        picture_structure = buf[2] & 0x03;
+                         top_field_first = buf[3] & (1 << 7);
+                         repeat_first_field = buf[3] & (1 << 1);
+-                        progressive_frame = buf[4] & (1 << 7);
++                        avctx->progressive_frame = !!(buf[4] & (1 << 7));
+ 
+                         /* check if we must repeat the frame */
+                         s->repeat_pict = 1;
+@@ -126,18 +129,30 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
+                                     s->repeat_pict = 5;
+                                 else
+                                     s->repeat_pict = 3;
+-                            } else if (progressive_frame) {
++                            } else if (avctx->progressive_frame) {
+                                 s->repeat_pict = 2;
+                             }
+                         }
+ 
+-                        if (!pc->progressive_sequence && !progressive_frame) {
++                        if (!pc->progressive_sequence) {
+                             if (top_field_first)
+                                 s->field_order = AV_FIELD_TT;
+                             else
+                                 s->field_order = AV_FIELD_BB;
+                         } else
+                             s->field_order = AV_FIELD_PROGRESSIVE;
++
++                        switch (picture_structure) {
++                        case PICT_TOP_FIELD:
++                            s->picture_structure = AV_PICTURE_STRUCTURE_TOP_FIELD;
++                            break;
++                        case PICT_BOTTOM_FIELD:
++                            s->picture_structure = AV_PICTURE_STRUCTURE_BOTTOM_FIELD;
++                            break;
++                        case PICT_FRAME:
++                            s->picture_structure = AV_PICTURE_STRUCTURE_FRAME;
++                            break;
++                        }
+                     }
+                     break;
+                 }
+diff --git a/libavformat/utils.c b/libavformat/utils.c
+index 1384b56771..8333590b7c 100644
+--- a/libavformat/utils.c
++++ b/libavformat/utils.c
+@@ -795,8 +795,15 @@ static int update_wrap_reference(AVFormatContext *s, AVStream *st, int stream_in
+         while (program) {
+             if (program->pts_wrap_reference != pts_wrap_reference) {
+                 for (i = 0; i<program->nb_stream_indexes; i++) {
+-                    s->streams[program->stream_index[i]]->internal->pts_wrap_reference = pts_wrap_reference;
+-                    s->streams[program->stream_index[i]]->internal->pts_wrap_behavior = pts_wrap_behavior;
++                    if (s->streams[program->stream_index[i]]->internal->pts_wrap_reference != AV_NOPTS_VALUE &&
++                        (s->streams[program->stream_index[i]]->internal->pts_wrap_reference - pts_wrap_reference > 1LL << st->pts_wrap_bits-3 ||
++                         s->streams[program->stream_index[i]]->internal->pts_wrap_reference < pts_wrap_reference)) {
++                        pts_wrap_reference = s->streams[program->stream_index[i]]->internal->pts_wrap_reference;
++                        pts_wrap_behavior = s->streams[program->stream_index[i]]->internal->pts_wrap_behavior;
++                    } else {
++                        s->streams[program->stream_index[i]]->internal->pts_wrap_reference = pts_wrap_reference;
++                        s->streams[program->stream_index[i]]->internal->pts_wrap_behavior = pts_wrap_behavior;
++                    }
+                 }
+ 
+                 program->pts_wrap_reference = pts_wrap_reference;
+-- 
+2.30.1.windows.1
+
