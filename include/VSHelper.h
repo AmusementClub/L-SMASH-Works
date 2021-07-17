@@ -47,7 +47,7 @@
 #define VSMAX(a,b) ((a) > (b) ? (a) : (b))
 #define VSMIN(a,b) ((a) > (b) ? (b) : (a))
 
-#ifdef __cplusplus 
+#ifdef __cplusplus
 /* A nicer templated malloc for all the C++ users out there */
 #if __cplusplus >= 201103L || (defined(_MSC_VER) && _MSC_VER >= 1900)
 template<typename T=void>

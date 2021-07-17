@@ -68,7 +68,7 @@ void set_error_on_init
     vsapi->setError( out, message );
 }
 
-extern void VS_CC vs_libavsmashsource_create( const VSMap *in, VSMap *out, void *user_data, VSCore *core, const VSAPI *vsapi );
+// extern void VS_CC vs_libavsmashsource_create( const VSMap *in, VSMap *out, void *user_data, VSCore *core, const VSAPI *vsapi );
 extern void VS_CC vs_lwlibavsource_create( const VSMap *in, VSMap *out, void *user_data, VSCore *core, const VSAPI *vsapi );
 
 void VS_CC vs_version_create( const VSMap *in, VSMap *out, void *user_data, VSCore *core, const VSAPI *vsapi )
@@ -94,14 +94,14 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit( VSConfigPlugin config_func, VSRegis
         plugin
     );
 #define COMMON_OPTS "threads:int:opt;seek_mode:int:opt;seek_threshold:int:opt;dr:int:opt;fpsnum:int:opt;fpsden:int:opt;variable:int:opt;format:data:opt;decoder:data:opt;prefer_hw:int:opt;"
-    register_func
-    (
-        "LibavSMASHSource",
-        "source:data;track:int:opt;" COMMON_OPTS "ff_loglevel:int:opt;",
-        vs_libavsmashsource_create,
-        NULL,
-        plugin
-    );
+    // register_func
+    // (
+    //     "LibavSMASHSource",
+    //     "source:data;track:int:opt;" COMMON_OPTS "ff_loglevel:int:opt;",
+    //     vs_libavsmashsource_create,
+    //     NULL,
+    //     plugin
+    // );
     register_func
     (
         "LWLibavSource",
