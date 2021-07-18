@@ -17,7 +17,7 @@ jobs:
           cfg_name: cwd
         - cfg_cachedir: '\":\"'
           cfg_name: ads
-        - cfg_cachedir: 'getenv("TEMP")'
+        - cfg_cachedir: 'getenv(\"TEMP\")'
           cfg_name: tmp
     steps:
     - name: Checkout repo
