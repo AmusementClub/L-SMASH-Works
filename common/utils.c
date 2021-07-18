@@ -32,10 +32,7 @@
 
 void *lw_malloc_zero( size_t size )
 {
-    void *p = malloc( size );
-    if( !p )
-        return NULL;
-    memset( p, 0, size );
+    void *p = calloc( size, 1 );
     return p;
 }
 
