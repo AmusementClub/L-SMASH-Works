@@ -50,9 +50,13 @@ extern "C"
 
 #include <sys/stat.h>
 #include "xxhash.h"
+#include "zstd.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#include <process.h>
 #endif
 
 typedef struct
@@ -2049,6 +2053,112 @@ static char *create_lwi_path
     return buf;
 }
 
+static void compress_thread(void* parg) {
+    uintptr_t* args = parg;
+    const char* index_file_path = (const char*)args[0];
+    const size_t index_file_path_len = strlen(index_file_path);
+    char* lwiz_path = _malloca(index_file_path_len + 16);
+    char mode = args[1];
+    FILE* fp = (FILE*)args[2];
+    const size_t bufsiz = 1ul << 17;
+    char buf[1ul << 17];
+    char cbuf[1ul << 17];
+    ZSTD_CCtx* cctx = NULL;
+    ZSTD_DCtx* dctx = NULL;
+    if( mode == 'r' ) {
+        dctx = ZSTD_createDCtx();
+    } else {
+        cctx = ZSTD_createCCtx();
+    }
+    ZSTD_inBuffer input = { buf, 0, 0 };
+    int eof = 0;
+    for( unsigned i = 1; ; ++i ) {
+        if( index_file_path_len > 5 && strcmp(index_file_path + index_file_path_len - 4, ":lwi") == 0 ) {
+            if( i == 1 ) {
+                sprintf(lwiz_path, "%sz", index_file_path);
+            } else {
+                sprintf(lwiz_path, "%sz%u", index_file_path, i);
+            }
+        } else {
+            if( i == 1 ) {
+                sprintf(lwiz_path, "%s:lwiz", index_file_path);
+            } else {
+                sprintf(lwiz_path, "%s:lwiz%u", index_file_path, i);
+            }
+        }
+        FILE* fz;
+        if( mode == 'r' ) {
+            fz = lw_fopen(lwiz_path, "rb");
+            if( !fz ) goto finish;
+            size_t read = fread(buf, 1, bufsiz, fz);
+            if( !read ) goto finish;
+            ZSTD_inBuffer input = { buf, read, 0 };
+            while( input.pos < input.size ) {
+                ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
+                if( ZSTD_isError(ZSTD_decompressStream(dctx, &output, &input)) ) goto finish;
+                fwrite(cbuf, 1, output.pos, fp);
+            }
+        } else {
+            fz = lw_fopen(lwiz_path, "wb");
+            if( !fz ) goto finish;
+            ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
+            for( ;; ) {
+                if( !eof && input.size == 0 ) {
+                    size_t read = fread(buf, 1, bufsiz, fp);
+                    if( !read ) eof = 1;
+                    input.size = read;
+                    input.pos = 0;
+                }
+                for( ;; ) {
+                    if ( !eof ) {
+                        if( ZSTD_isError(ZSTD_compressStream(cctx, &output, &input)) ) goto finish;
+                    } else {
+                        size_t ret = ZSTD_endStream(cctx, &output);
+                        if( ZSTD_isError(ret) ) goto finish;
+                        else {
+                            fwrite(cbuf, 1, output.pos, fz);
+                            if( ret == 0 ) goto finish;
+                            else goto nextsg;
+                        }
+                    }
+                    if( output.pos == output.size ) {
+                        fwrite(cbuf, 1, bufsiz, fz);
+                        goto nextsg;
+                    }
+                    if( !eof && input.pos == input.size ) {
+                        input.size = 0;
+                        goto nextrd;
+                    }
+                }
+                nextrd:;
+            }
+        }
+nextsg: fclose(fz);
+        continue;
+finish: if( fz ) fclose(fz);
+        break;
+    }
+    fclose(fp);
+    free(index_file_path);
+}
+
+static FILE* create_compressed_file(const char* index_file_path, const char* mode) {
+    int fds[2];
+    const size_t bufsiz = 1ul << 17;
+    if( _pipe(fds, bufsiz, _O_BINARY | _O_NOINHERIT) == -1) {
+        return NULL;
+    }
+    if( mode[0] == 'w' ) {
+        int t = fds[0]; fds[0] = fds[1]; fds[1] = t;
+    }
+    uintptr_t* parg = lw_malloc_zero(sizeof(uintptr_t) * 3);
+    parg[0] = (uintptr_t)strdup(index_file_path);
+    parg[1] = mode[0];
+    parg[2] = (uintptr_t)_fdopen(fds[1], "r+b");
+    _beginthread(compress_thread, 0, parg);
+    return _fdopen(fds[0], mode);
+}
+
 static void create_index
 (
     lwlibav_file_handler_t         *lwhp,
@@ -2099,13 +2209,19 @@ static void create_index
         </LibavReaderIndexFile>
      */
     FILE *index = NULL;
-    if( opt->index_file_path )
-        index = !opt->no_create_index ? lw_fopen( opt->index_file_path, "wb" ) : NULL;
-    else if ( !opt->no_create_index )
-    {
-        char *index_path = create_lwi_path( opt );
-        index = lw_fopen( index_path, "wb" );
-        lw_free( index_path );
+    FILE *indexz = NULL;
+    if( !opt->no_create_index ) {
+        if( opt->index_file_path ) {
+            index = lw_fopen( opt->index_file_path, "wb" );
+            indexz = create_compressed_file( opt->index_file_path, "wb" );
+        }
+        else
+        {
+            char *index_path = create_lwi_path( opt );
+            index = lw_fopen( index_path, "wb" );
+            indexz = create_compressed_file( index_path, "wb" );
+            lw_free( index_path );
+        }
     }
     if( !index && !opt->no_create_index )
     {
@@ -2192,9 +2308,9 @@ static void create_index
         if( !helper || !helper->codec_ctx )
             continue;
         AVCodecContext *pkt_ctx = helper->codec_ctx;
-        print_index( index, "<StreamInfo=%d,%d>\n", stream_index, codec_type );
+        print_index( indexz, "<StreamInfo=%d,%d>\n", stream_index, codec_type );
         if( codec_type == AVMEDIA_TYPE_VIDEO )
-            print_index( index, "Codec=%d,TimeBase=%d/%d,Width=%d,Height=%d,Format=%s,ColorSpace=%d\n",
+            print_index( indexz, "Codec=%d,TimeBase=%d/%d,Width=%d,Height=%d,Format=%s,ColorSpace=%d\n",
                          pkt_ctx->codec_id, stream->time_base.num, stream->time_base.den,
                          pkt_ctx->width, pkt_ctx->height,
                          av_get_pix_fmt_name( pkt_ctx->pix_fmt ) ? av_get_pix_fmt_name( pkt_ctx->pix_fmt ) : "none",
@@ -2206,13 +2322,13 @@ static void create_index
             int bits_per_sample = pkt_ctx->bits_per_raw_sample   > 0 ? pkt_ctx->bits_per_raw_sample
                                 : pkt_ctx->bits_per_coded_sample > 0 ? pkt_ctx->bits_per_coded_sample
                                 : av_get_bytes_per_sample( pkt_ctx->sample_fmt ) << 3;
-            print_index( index, "Codec=%d,TimeBase=%d/%d,Channels=%d:0x%" PRIx64 ",Rate=%d,Format=%s,BPS=%d\n",
+            print_index( indexz, "Codec=%d,TimeBase=%d/%d,Channels=%d:0x%" PRIx64 ",Rate=%d,Format=%s,BPS=%d\n",
                          pkt_ctx->codec_id, stream->time_base.num, stream->time_base.den,
                          pkt_ctx->channels, pkt_ctx->channel_layout, pkt_ctx->sample_rate,
                          av_get_sample_fmt_name( pkt_ctx->sample_fmt ) ? av_get_sample_fmt_name( pkt_ctx->sample_fmt ) : "none",
                          bits_per_sample );
         }
-        print_index( index, "</StreamInfo>\n" );
+        print_index( indexz, "</StreamInfo>\n" );
     }
     while( read_av_frame( format_ctx, &pkt ) >= 0 )
     {
@@ -2275,10 +2391,8 @@ static void create_index
                 /* Update active video stream. */
                 if( index )
                 {
-                    int32_t current_pos = ftell( index );
                     fseek( index, video_index_pos, SEEK_SET );
                     fprintf( index, "<ActiveVideoStreamIndex>%+011d</ActiveVideoStreamIndex>\n", pkt.stream_index );
-                    fseek( index, current_pos, SEEK_SET );
                 }
                 memset( video_info, 0, (video_sample_count + 1) * sizeof(video_frame_info_t) );
                 vdhp->ctx                = pkt_ctx;
@@ -2422,7 +2536,7 @@ static void create_index
                     entry->codec_tag = pkt_ctx->codec_tag;
             }
             /* Write a video packet info to the index file. */
-            print_index( index, "Index=%d,POS=%" PRId64 ",PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=%d\n"
+            print_index( indexz, "Index=%d,POS=%" PRId64 ",PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=%d\n"
                          "Key=%d,Pic=%d,POC=%d,Repeat=%d,Field=%d\n",
                          pkt.stream_index, pkt.pos, pkt.pts, pkt.dts, extradata_index,
                          !!(pkt.flags & AV_PKT_FLAG_KEY), pict_type, poc, repeat_pict, field_info );
@@ -2434,10 +2548,8 @@ static void create_index
                 /* Update active audio stream. */
                 if( index )
                 {
-                    int32_t current_pos = ftell( index );
                     fseek( index, audio_index_pos, SEEK_SET );
                     fprintf( index, "<ActiveAudioStreamIndex>%+011d</ActiveAudioStreamIndex>\n", pkt.stream_index );
-                    fseek( index, current_pos, SEEK_SET );
                 }
                 adhp->ctx          = pkt_ctx;
                 adhp->codec_id     = pkt_ctx->codec_id;
@@ -2518,7 +2630,7 @@ static void create_index
                     entry->codec_tag = pkt_ctx->codec_tag;
             }
             /* Write an audio packet info to the index file. */
-            print_index( index, "Index=%d,POS=%" PRId64 ",PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=%d\n"
+            print_index( indexz, "Index=%d,POS=%" PRId64 ",PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=%d\n"
                          "Length=%d\n",
                          pkt.stream_index, pkt.pos, pkt.pts, pkt.dts, extradata_index,
                          frame_length );
@@ -2576,13 +2688,13 @@ static void create_index
                      && audio_info[audio_frame_number].length != audio_info[audio_frame_number - 1].length )
                         constant_frame_length = 0;
                 }
-                print_index( index, "Index=%d,POS=-1,PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=-1\n"
+                print_index( indexz, "Index=%d,POS=-1,PTS=%" PRId64 ",DTS=%" PRId64 ",EDI=-1\n"
                              "Length=%d\n",
                              stream_index, AV_NOPTS_VALUE, AV_NOPTS_VALUE, frame_length );
             }
         }
     }
-    print_index( index, "</LibavReaderIndex>\n" );
+    print_index( indexz, "</LibavReaderIndex>\n" );
     /* Deallocate video frame info if no active video stream. */
     if( vdhp->stream_index < 0 )
         lw_freep( &video_info );
@@ -2622,7 +2734,7 @@ static void create_index
         AVStream *stream = format_ctx->streams[stream_index];
         if( stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO
          || (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && adhp->stream_index != -2) )
-            print_index( index, "<StreamDuration=%d,%d>%" PRId64 "</StreamDuration>\n",
+            print_index( indexz, "<StreamDuration=%d,%d>%" PRId64 "</StreamDuration>\n",
                          stream_index, stream->codecpar->codec_type, stream->duration );
     }
     if( !strcmp( lwhp->format_name, "asf" ) )
@@ -2700,10 +2812,10 @@ static void create_index
         AVStream *stream = format_ctx->streams[stream_index];
         if( stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO )
         {
-            print_index( index, "<StreamIndexEntries=%d,%d,%d>\n", stream_index, AVMEDIA_TYPE_VIDEO, stream->nb_index_entries );
+            print_index( indexz, "<StreamIndexEntries=%d,%d,%d>\n", stream_index, AVMEDIA_TYPE_VIDEO, stream->nb_index_entries );
             if( vdhp->stream_index != stream_index )
                 for( int i = 0; i < stream->nb_index_entries; i++ )
-                    write_av_index_entry( index, &stream->index_entries[i] );
+                    write_av_index_entry( indexz, &stream->index_entries[i] );
             else if( stream->nb_index_entries > 0 )
             {
                 vdhp->index_entries = (AVIndexEntry *)av_malloc( stream->index_entries_allocated_size );
@@ -2713,18 +2825,18 @@ static void create_index
                 {
                     AVIndexEntry *ie = &stream->index_entries[i];
                     vdhp->index_entries[i] = *ie;
-                    write_av_index_entry( index, ie );
+                    write_av_index_entry( indexz, ie );
                 }
                 vdhp->index_entries_count = stream->nb_index_entries;
             }
-            print_index( index, "</StreamIndexEntries>\n" );
+            print_index( indexz, "</StreamIndexEntries>\n" );
         }
         else if( stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && adhp->stream_index != -2 )
         {
-            print_index( index, "<StreamIndexEntries=%d,%d,%d>\n", stream_index, AVMEDIA_TYPE_AUDIO, stream->nb_index_entries );
+            print_index( indexz, "<StreamIndexEntries=%d,%d,%d>\n", stream_index, AVMEDIA_TYPE_AUDIO, stream->nb_index_entries );
             if( adhp->stream_index != stream_index )
                 for( int i = 0; i < stream->nb_index_entries; i++ )
-                    write_av_index_entry( index, &stream->index_entries[i] );
+                    write_av_index_entry( indexz, &stream->index_entries[i] );
             else if( stream->nb_index_entries > 0 )
             {
                 /* Audio stream in matroska container requires index_entries for seeking.
@@ -2736,11 +2848,11 @@ static void create_index
                 {
                     AVIndexEntry *ie = &stream->index_entries[i];
                     adhp->index_entries[i] = *ie;
-                    write_av_index_entry( index, ie );
+                    write_av_index_entry( indexz, ie );
                 }
                 adhp->index_entries_count = stream->nb_index_entries;
             }
-            print_index( index, "</StreamIndexEntries>\n" );
+            print_index( indexz, "</StreamIndexEntries>\n" );
         }
     }
     for( unsigned int stream_index = 0; stream_index < format_ctx->nb_streams; stream_index++ )
@@ -2757,12 +2869,12 @@ static void create_index
             void (*write_av_extradata)( FILE *, lwlibav_extradata_t * ) = codecpar->codec_type == AVMEDIA_TYPE_VIDEO
                                                                         ? write_video_extradata
                                                                         : write_audio_extradata;
-            print_index( index, "<ExtraDataList=%d,%d,%d>\n", stream_index, codecpar->codec_type, list->entry_count );
+            print_index( indexz, "<ExtraDataList=%d,%d,%d>\n", stream_index, codecpar->codec_type, list->entry_count );
             if( (codecpar->codec_type == AVMEDIA_TYPE_VIDEO && stream_index == vdhp->stream_index)
              || (codecpar->codec_type == AVMEDIA_TYPE_AUDIO && stream_index == adhp->stream_index) )
             {
                 for( int i = 0; i < list->entry_count; i++ )
-                    write_av_extradata( index, &list->entries[i] );
+                    write_av_extradata( indexz, &list->entries[i] );
                 lwlibav_extradata_handler_t *exhp = codecpar->codec_type == AVMEDIA_TYPE_VIDEO ? &vdhp->exh : &adhp->exh;
                 exhp->entry_count   = list->entry_count;
                 exhp->entries       = list->entries;
@@ -2775,11 +2887,11 @@ static void create_index
             }
             else
                 for( int i = 0; i < list->entry_count; i++ )
-                    write_av_extradata( index, &list->entries[i] );
-            print_index( index, "</ExtraDataList>\n" );
+                    write_av_extradata( indexz, &list->entries[i] );
+            print_index( indexz, "</ExtraDataList>\n" );
         }
     }
-    print_index( index, "</LibavReaderIndexFile>\n" );
+    print_index( indexz, "</LibavReaderIndexFile>\n" );
     if( vdhp->stream_index >= 0 )
     {
         vdhp->keyframe_list = (uint8_t *)lw_malloc_zero( (video_sample_count + 1) * sizeof(uint8_t) );
@@ -2809,6 +2921,8 @@ static void create_index
     cleanup_index_helpers( &indexer, format_ctx );
     if( index )
         fclose( index );
+    if( indexz )
+        fclose( indexz );
     if( indicator->close )
         indicator->close( php );
     vdhp->format = NULL;
@@ -2820,6 +2934,8 @@ fail_index:
     free( audio_info );
     if( index )
         fclose( index );
+    if( indexz )
+        fclose( indexz );
     if( indicator->close )
         indicator->close( php );
     vdhp->format = NULL;
@@ -2835,7 +2951,8 @@ static int parse_index
     lwlibav_audio_decode_handler_t *adhp,
     lwlibav_audio_output_handler_t *aohp,
     lwlibav_option_t               *opt,
-    FILE                           *index
+    FILE                           *index,
+    FILE                           *indexz
 )
 {
     /* Test to open the target file. */
@@ -2938,7 +3055,7 @@ static int parse_index
     int      constant_frame_length = 1;
     uint64_t audio_duration        = 0;
     char buf[1024];
-    if( !fgets( buf, sizeof(buf), index ) )
+    if( !fgets( buf, sizeof(buf), indexz ) )
         goto fail_parsing;
     while( !strncmp( buf, "<StreamInfo=", strlen( "<StreamInfo=" ) ) )
     {
@@ -2946,7 +3063,7 @@ static int parse_index
         int codec_type;
         if( sscanf( buf, "<StreamInfo=%d,%d>", &stream_index, &codec_type ) != 2 )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
         lwindex_stream_info_t *temp = (lwindex_stream_info_t *)realloc( stream_info, (stream_index + 1) * sizeof(lwindex_stream_info_t) );
         if( !temp )
@@ -2966,11 +3083,11 @@ static int parse_index
                         &info->codec_id, &info->time_base.num, &info->time_base.den, &info->channels, &info->layout, &info->sample_rate, info->fmt, &info->bits_per_sample ) != 8 )
                 goto fail_parsing;
         }
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
         if( strncmp( buf, "</StreamInfo>", strlen( "</StreamInfo>" ) ) )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
     }
     while( !strncmp( buf, "Index=", strlen( "Index=" ) ) )
@@ -2983,7 +3100,7 @@ static int parse_index
         if( sscanf( buf, "Index=%d,POS=%" SCNd64 ",PTS=%" SCNd64 ",DTS=%" SCNd64 ",EDI=%d",
                     &stream_index, &pos, &pts, &dts, &extradata_index ) != 5 )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
         int        codec_type = stream_info[stream_index].codec_type;
         int        codec_id   = stream_info[stream_index].codec_id;
@@ -3155,7 +3272,7 @@ static int parse_index
                 }
             }
         }
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
     }
     if( video_present && opt->force_video && opt->force_video_index != -1
@@ -3166,7 +3283,7 @@ static int parse_index
     if( strncmp( buf, "</LibavReaderIndex>", strlen( "</LibavReaderIndex>" ) ) )
         goto fail_parsing;
     /* Parse stream durations. */
-    if( !fgets( buf, sizeof(buf), index ) )
+    if( !fgets( buf, sizeof(buf), indexz ) )
         goto fail_parsing;
     while( !strncmp( buf, "<StreamDuration=", strlen( "<StreamDuration=" ) ) )
     {
@@ -3177,7 +3294,7 @@ static int parse_index
             goto fail_parsing;
         if( codec_type == AVMEDIA_TYPE_VIDEO && stream_index == vdhp->stream_index )
             vdhp->stream_duration = stream_duration;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
     }
     /* Parse AVIndexEntry. */
@@ -3188,7 +3305,7 @@ static int parse_index
         int index_entries_count;
         if( sscanf( buf, "<StreamIndexEntries=%d,%d,%d>", &stream_index, &codec_type, &index_entries_count ) != 3 )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
         if( index_entries_count > 0 )
         {
@@ -3209,7 +3326,7 @@ static int parse_index
                     ie.size  = size;
                     ie.flags = flags;
                     vdhp->index_entries[i] = ie;
-                    if( !fgets( buf, sizeof(buf), index ) )
+                    if( !fgets( buf, sizeof(buf), indexz ) )
                         goto fail_parsing;
                 }
             }
@@ -3230,18 +3347,18 @@ static int parse_index
                     ie.size  = size;
                     ie.flags = flags;
                     adhp->index_entries[i] = ie;
-                    if( !fgets( buf, sizeof(buf), index ) )
+                    if( !fgets( buf, sizeof(buf), indexz ) )
                         goto fail_parsing;
                 }
             }
             else
                 for( int i = 0; i < index_entries_count; i++ )
-                    if( !fgets( buf, sizeof(buf), index ) )
+                    if( !fgets( buf, sizeof(buf), indexz ) )
                         goto fail_parsing;
         }
         if( strncmp( buf, "</StreamIndexEntries>", strlen( "</StreamIndexEntries>" ) ) )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
     }
     /* Parse extradata. */
@@ -3252,7 +3369,7 @@ static int parse_index
         int entry_count;
         if( sscanf( buf, "<ExtraDataList=%d,%d,%d>", &stream_index, &codec_type, &entry_count ) != 3 )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
         if( entry_count > 0 )
         {
@@ -3297,15 +3414,15 @@ static int parse_index
                         entry->extradata = (uint8_t *)av_malloc( entry->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE );
                         if( !entry->extradata )
                             goto fail_parsing;
-                        if( fread( entry->extradata, 1, entry->extradata_size, index ) != entry->extradata_size )
+                        if( fread( entry->extradata, 1, entry->extradata_size, indexz ) != entry->extradata_size )
                         {
                             av_free( entry->extradata );
                             goto fail_parsing;
                         }
                         memset( entry->extradata + entry->extradata_size, 0, AV_INPUT_BUFFER_PADDING_SIZE );
                     }
-                    if( !fgets( buf, sizeof(buf), index )   /* new line ('\n') */
-                     || !fgets( buf, sizeof(buf), index ) ) /* the first line of the next entry */
+                    if( !fgets( buf, sizeof(buf), indexz )   /* new line ('\n') */
+                     || !fgets( buf, sizeof(buf), indexz ) ) /* the first line of the next entry */
                         goto fail_parsing;
                 }
             }
@@ -3318,16 +3435,16 @@ static int parse_index
                         goto fail_parsing;
                     /* extradata */
                     for( int i = 0; i < extradata_size; i++ )
-                        if( fgetc( index ) == EOF )
+                        if( fgetc( indexz ) == EOF )
                             goto fail_parsing;
-                    if( !fgets( buf, sizeof(buf), index )   /* new line ('\n') */
-                     || !fgets( buf, sizeof(buf), index ) ) /* the first line of the next entry */
+                    if( !fgets( buf, sizeof(buf), indexz )   /* new line ('\n') */
+                     || !fgets( buf, sizeof(buf), indexz ) ) /* the first line of the next entry */
                         goto fail_parsing;
                 }
         }
         if( strncmp( buf, "</ExtraDataList>", strlen( "</ExtraDataList>" ) ) )
             goto fail_parsing;
-        if( !fgets( buf, sizeof(buf), index ) )
+        if( !fgets( buf, sizeof(buf), indexz ) )
             goto fail_parsing;
     }
     if( !strncmp( buf, "</LibavReaderIndexFile>", strlen( "</LibavReaderIndexFile>" ) ) )
@@ -3419,17 +3536,20 @@ int lwlibav_construct_index
     size_t file_path_length = strlen( opt->file_path );
     const char *ext = file_path_length >= 5 ? &opt->file_path[file_path_length - 4] : NULL;
     int has_lwi_ext = ext && !strncmp( ext, ".lwi", strlen( ".lwi" ) );
-    FILE *index;
-    if( has_lwi_ext )
+    FILE *index, *indexz;
+    if( has_lwi_ext ) {
         index = lw_fopen( opt->file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-    else if( opt->index_file_path )
+        indexz = create_compressed_file(opt->file_path, "rb");
+    } else if( opt->index_file_path ) {
         index = lw_fopen( opt->index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-    else
+        indexz = create_compressed_file(opt->index_file_path, "rb");
+    } else
     {
         char *index_file_path = create_lwi_path ( opt );
         if( !index_file_path )
             return -1;
         index = lw_fopen( index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
+        indexz = create_compressed_file(index_file_path, "rb");
         free( index_file_path );
     }
     if( index )
@@ -3441,7 +3561,7 @@ int lwlibav_construct_index
          && ((lwindex_version[0] << 24) | (lwindex_version[1] << 16) | (lwindex_version[2] << 8) | lwindex_version[3]) == LWINDEX_VERSION
          && 1 == fscanf( index, "<LibavReaderIndexFile=%d>\n", &index_file_version )
          && index_file_version == LWINDEX_INDEX_FILE_VERSION
-         && parse_index( lwhp, vdhp, vohp, adhp, aohp, opt, index ) == 0 )
+         && parse_index( lwhp, vdhp, vohp, adhp, aohp, opt, index, indexz ) == 0 )
         {
             /* Opening and parsing the index file succeeded. */
             fclose( index );

@@ -10,6 +10,7 @@ string(STRIP ${VCS_TAG} VCS_TAG)
 configure_file(VapourSynth/version.h.in version.h)
 
 find_package(FFMPEG 4.4 REQUIRED)
+find_package(zstd 1.4 REQUIRED)
 
 set(CMAKE_C_STANDARD 99 REQUIRED)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
@@ -46,7 +47,8 @@ target_include_directories(vslsmas PRIVATE
 target_link_directories(vslsmas PRIVATE
     ${FFMPEG_LIBRARY_DIRS})
 target_link_libraries(vslsmas PRIVATE
-    ${FFMPEG_LIBRARIES})
+    ${FFMPEG_LIBRARIES}
+    zstd::libzstd_static)
 target_compile_definitions(vslsmas PRIVATE
     "DEFAULT_CACHEDIR=${DEFAULT_CACHEDIR}"
     XXH_INLINE_ALL
