@@ -2053,7 +2053,7 @@ static char *create_lwi_path
     return buf;
 }
 
-static void compress_thread(void* parg) {
+static void index_compress_thread(void* parg) {
     uintptr_t* args = parg;
     const char* index_file_path = (const char*)args[0];
     const size_t index_file_path_len = strlen(index_file_path);
@@ -2072,6 +2072,27 @@ static void compress_thread(void* parg) {
     }
     ZSTD_inBuffer input = { buf, 0, 0 };
     int eof = 0;
+
+    if( mode == 'w' ) {
+        wchar_t* lwi_wpath;
+        wchar_t lwiz_wpath[MAX_PATH + 1];
+        size_t nc = lw_string_to_wchar( CP_UTF8, index_file_path, &lwi_wpath);
+        if( !nc-- ) goto fail_clean;
+        if( index_file_path_len > 5 && strcmp(index_file_path + index_file_path_len - 4, ":lwi") == 0 )
+            lwi_wpath[nc -= 4] = 0;
+        wcscpy(lwiz_wpath, lwi_wpath);
+        WIN32_FIND_STREAM_DATA stream_data;
+        HANDLE hFind = FindFirstStreamW(lwi_wpath, 0, &stream_data, 0);
+        if( hFind == INVALID_HANDLE_VALUE ) goto fail_clean;
+        do {
+            if( wcsncmp(stream_data.cStreamName, L":lwiz", 5) == 0 ) {
+                wcscpy(lwiz_wpath + nc, stream_data.cStreamName);
+                DeleteFileW(lwiz_wpath);
+            }
+        } while( FindNextStreamW(hFind, &stream_data) );
+    }
+
+fail_clean:
     for( unsigned i = 1; ; ++i ) {
         if( index_file_path_len > 5 && strcmp(index_file_path + index_file_path_len - 4, ":lwi") == 0 ) {
             if( i == 1 ) {
@@ -2142,7 +2163,7 @@ finish: if( fz ) fclose(fz);
     free(index_file_path);
 }
 
-static FILE* create_compressed_file(const char* index_file_path, const char* mode) {
+static FILE* create_compressed_index(const char* index_file_path, const char* mode) {
     int fds[2];
     const size_t bufsiz = 1ul << 17;
     if( _pipe(fds, bufsiz, _O_BINARY | _O_NOINHERIT) == -1) {
@@ -2155,7 +2176,7 @@ static FILE* create_compressed_file(const char* index_file_path, const char* mod
     parg[0] = (uintptr_t)strdup(index_file_path);
     parg[1] = mode[0];
     parg[2] = (uintptr_t)_fdopen(fds[1], "r+b");
-    _beginthread(compress_thread, 0, parg);
+    _beginthread(index_compress_thread, 0, parg);
     return _fdopen(fds[0], mode);
 }
 
@@ -2213,13 +2234,13 @@ static void create_index
     if( !opt->no_create_index ) {
         if( opt->index_file_path ) {
             index = lw_fopen( opt->index_file_path, "wb" );
-            indexz = create_compressed_file( opt->index_file_path, "wb" );
+            indexz = create_compressed_index( opt->index_file_path, "wb" );
         }
         else
         {
             char *index_path = create_lwi_path( opt );
             index = lw_fopen( index_path, "wb" );
-            indexz = create_compressed_file( index_path, "wb" );
+            indexz = create_compressed_index( index_path, "wb" );
             lw_free( index_path );
         }
     }
@@ -3539,17 +3560,17 @@ int lwlibav_construct_index
     FILE *index, *indexz;
     if( has_lwi_ext ) {
         index = lw_fopen( opt->file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_file(opt->file_path, "rb");
+        indexz = create_compressed_index(opt->file_path, "rb");
     } else if( opt->index_file_path ) {
         index = lw_fopen( opt->index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_file(opt->index_file_path, "rb");
+        indexz = create_compressed_index(opt->index_file_path, "rb");
     } else
     {
         char *index_file_path = create_lwi_path ( opt );
         if( !index_file_path )
             return -1;
         index = lw_fopen( index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_file(index_file_path, "rb");
+        indexz = create_compressed_index(index_file_path, "rb");
         free( index_file_path );
     }
     if( index )
