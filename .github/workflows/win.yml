@@ -1,0 +1,63 @@
+name: Windows Build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-2019
+    defaults:
+      run:
+        shell: cmd
+    strategy:
+      matrix:
+        include:
+        - cfg_cachedir: '\"\"'
+          cfg_name: src
+        - cfg_cachedir: '\".\"'
+          cfg_name: cwd
+        - cfg_cachedir: '\":\"'
+          cfg_name: ads
+        - cfg_cachedir: 'getenv("TEMP")'
+          cfg_name: tmp
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Checkout overlay ports
+      uses: actions/checkout@v2
+      with:
+        ref: vcpkg-ffmpeg-overlay
+        path: ports
+    - name: Checkout vcpkg
+      uses: actions/checkout@v2
+      with:
+        repository: microsoft/vcpkg
+        ref: master
+        path: vcpkg
+    - name: Setup msbuild
+      uses: microsoft/setup-msbuild@v1
+    - name: Setup vcpkg
+      run: bootstrap-vcpkg.bat
+      working-directory: vcpkg
+    - name: Customize triplet
+      run: |
+        copy x64-windows-static-md.cmake x64-windows-static-md-rel.cmake
+        echo set(VCPKG_BUILD_TYPE release) >> x64-windows-static-md-rel.cmake
+      working-directory: vcpkg/triplets/community
+    - name: Build ffmpeg
+      run: .\vcpkg install ffmpeg[core,gpl,avcodec,avformat,swresample,swscale]:x64-windows-static-md-rel zstd:x64-windows-static-md-rel xxHash:x64-windows-static-md-rel --overlay-ports=ports
+      working-directory: vcpkg
+    - name: Configure
+      run: |
+        copy "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\um\x64\*.lib" vcpkg\installed\x64-windows-static-md-rel\lib
+        mkdir build
+        cmake -S. -Bbuild -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static-md-rel -DCMAKE_BUILD_TYPE=Release -DDEFAULT_CACHEDIR=${{matrix.cfg_cachedir}}
+    - name: Build
+      run: msbuild /m /p:Configuration=Release /p:Platform=x64 vslsmas.sln
+      working-directory: build
+    - name: Upload
+      uses: actions/upload-artifact@v2
+      with:
+        name: vslsmas-${{matrix.cfg_name}}
+        path: build/Release/vslsmas.dll
