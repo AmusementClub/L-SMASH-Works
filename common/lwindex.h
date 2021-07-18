@@ -37,6 +37,7 @@ typedef struct
     int         av_sync;
     int         no_create_index;
     const char *index_file_path;
+    int         cache_compression_level;
     int         force_video;
     int         force_video_index;
     int         force_audio;

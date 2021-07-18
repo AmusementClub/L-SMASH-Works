@@ -2060,6 +2060,7 @@ static void index_compress_thread(void* parg) {
     char* lwiz_path = _malloca(index_file_path_len + 16);
     char mode = args[1];
     FILE* fp = (FILE*)args[2];
+    int cache_compression_level = args[3];
     const size_t bufsiz = 1ul << 17;
     char buf[1ul << 17];
     char cbuf[1ul << 17];
@@ -2069,6 +2070,8 @@ static void index_compress_thread(void* parg) {
         dctx = ZSTD_createDCtx();
     } else {
         cctx = ZSTD_createCCtx();
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, cache_compression_level);
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
     }
     ZSTD_inBuffer input = { buf, 0, 0 };
     int eof = 0;
@@ -2163,7 +2166,7 @@ finish: if( fz ) fclose(fz);
     free(index_file_path);
 }
 
-static FILE* create_compressed_index(const char* index_file_path, const char* mode) {
+static FILE* create_compressed_index(const char* index_file_path, const char* mode, int cache_compression_level) {
     int fds[2];
     const size_t bufsiz = 1ul << 17;
     if( _pipe(fds, bufsiz, _O_BINARY | _O_NOINHERIT) == -1) {
@@ -2172,10 +2175,11 @@ static FILE* create_compressed_index(const char* index_file_path, const char* mo
     if( mode[0] == 'w' ) {
         int t = fds[0]; fds[0] = fds[1]; fds[1] = t;
     }
-    uintptr_t* parg = lw_malloc_zero(sizeof(uintptr_t) * 3);
+    uintptr_t* parg = lw_malloc_zero(sizeof(uintptr_t) * 4);
     parg[0] = (uintptr_t)strdup(index_file_path);
     parg[1] = mode[0];
     parg[2] = (uintptr_t)_fdopen(fds[1], "r+b");
+    parg[3] = cache_compression_level;
     _beginthread(index_compress_thread, 0, parg);
     return _fdopen(fds[0], mode);
 }
@@ -2234,13 +2238,13 @@ static void create_index
     if( !opt->no_create_index ) {
         if( opt->index_file_path ) {
             index = lw_fopen( opt->index_file_path, "wb" );
-            indexz = create_compressed_index( opt->index_file_path, "wb" );
+            indexz = create_compressed_index( opt->index_file_path, "wb", opt->cache_compression_level );
         }
         else
         {
             char *index_path = create_lwi_path( opt );
             index = lw_fopen( index_path, "wb" );
-            indexz = create_compressed_index( index_path, "wb" );
+            indexz = create_compressed_index( index_path, "wb", opt->cache_compression_level );
             lw_free( index_path );
         }
     }
@@ -3560,17 +3564,17 @@ int lwlibav_construct_index
     FILE *index, *indexz;
     if( has_lwi_ext ) {
         index = lw_fopen( opt->file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(opt->file_path, "rb");
+        indexz = create_compressed_index(opt->file_path, "rb", opt->cache_compression_level);
     } else if( opt->index_file_path ) {
         index = lw_fopen( opt->index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(opt->index_file_path, "rb");
+        indexz = create_compressed_index(opt->index_file_path, "rb", opt->cache_compression_level);
     } else
     {
         char *index_file_path = create_lwi_path ( opt );
         if( !index_file_path )
             return -1;
         index = lw_fopen( index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(index_file_path, "rb");
+        indexz = create_compressed_index(index_file_path, "rb", opt->cache_compression_level);
         free( index_file_path );
     }
     if( index )

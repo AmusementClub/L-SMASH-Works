@@ -312,6 +312,7 @@ void VS_CC vs_lwlibavsource_create( const VSMap *in, VSMap *out, void *user_data
     int64_t apply_repeat_flag;
     int64_t field_dominance;
     int64_t ff_loglevel;
+    int64_t cache_compression_level;
     const char *index_file_path;
     const char *format;
     const char *preferred_decoder_names;
@@ -329,6 +330,7 @@ void VS_CC vs_lwlibavsource_create( const VSMap *in, VSMap *out, void *user_data
     set_option_int64 ( &apply_repeat_flag,       1,    "repeat",         in, vsapi );
     set_option_int64 ( &field_dominance,         0,    "dominance",      in, vsapi );
     set_option_int64 ( &ff_loglevel,             0,    "ff_loglevel",    in, vsapi );
+    set_option_int64 ( &cache_compression_level, 15,   "cache_compression_level",     in, vsapi );
     set_option_string( &index_file_path,         NULL, "cachefile",      in, vsapi );
     set_option_string( &format,                  NULL, "format",         in, vsapi );
     set_option_string( &preferred_decoder_names, NULL, "decoder",        in, vsapi );
@@ -342,6 +344,7 @@ void VS_CC vs_lwlibavsource_create( const VSMap *in, VSMap *out, void *user_data
     opt.av_sync           = 0;
     opt.no_create_index   = !cache_index;
     opt.index_file_path   = index_file_path;
+    opt.cache_compression_level = cache_compression_level;
     opt.force_video       = (stream_index >= 0);
     opt.force_video_index = stream_index >= 0 ? stream_index : -1;
     opt.force_audio       = 0;
