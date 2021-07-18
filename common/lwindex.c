@@ -2164,6 +2164,8 @@ finish: if( fz ) fclose( fz );
     }
     fclose( fp );
     free( index_file_path );
+    if( cctx ) ZSTD_freeCCtx( cctx );
+    if( dctx ) ZSTD_freeDCtx( dctx );
 }
 
 static FILE* create_compressed_index( const char* index_file_path, const char* mode, int cache_compression_level ) {
