@@ -3592,10 +3592,12 @@ int lwlibav_construct_index
         {
             /* Opening and parsing the index file succeeded. */
             fclose( index );
+            fclose( indexz );
             lwhp->threads = opt->threads;
             return 0;
         }
         fclose( index );
+        fclose( indexz );
     }
     /* Open file. */
     if( !lwhp->file_path )
