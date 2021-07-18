@@ -11,6 +11,7 @@ configure_file(VapourSynth/version.h.in version.h)
 
 find_package(FFMPEG 4.4 REQUIRED)
 find_package(zstd 1.4 REQUIRED)
+find_package(xxHash 0.8 REQUIRED)
 
 set(CMAKE_C_STANDARD 99 REQUIRED)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
