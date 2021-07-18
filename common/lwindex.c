@@ -2053,11 +2053,11 @@ static char *create_lwi_path
     return buf;
 }
 
-static void index_compress_thread(void* parg) {
+static void index_compress_thread( void* parg ) {
     uintptr_t* args = parg;
     const char* index_file_path = (const char*)args[0];
-    const size_t index_file_path_len = strlen(index_file_path);
-    char* lwiz_path = _malloca(index_file_path_len + 16);
+    const size_t index_file_path_len = strlen( index_file_path );
+    char* lwiz_path = _malloca( index_file_path_len + 16 );
     char mode = args[1];
     FILE* fp = (FILE*)args[2];
     int cache_compression_level = args[3];
@@ -2070,8 +2070,8 @@ static void index_compress_thread(void* parg) {
         dctx = ZSTD_createDCtx();
     } else {
         cctx = ZSTD_createCCtx();
-        ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, cache_compression_level);
-        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1);
+        ZSTD_CCtx_setParameter( cctx, ZSTD_c_compressionLevel, cache_compression_level );
+        ZSTD_CCtx_setParameter( cctx, ZSTD_c_checksumFlag, 1 );
     }
     ZSTD_inBuffer input = { buf, 0, 0 };
     int eof = 0;
@@ -2081,72 +2081,72 @@ static void index_compress_thread(void* parg) {
         wchar_t lwiz_wpath[MAX_PATH + 1];
         size_t nc = lw_string_to_wchar( CP_UTF8, index_file_path, &lwi_wpath);
         if( !nc-- ) goto fail_clean;
-        if( index_file_path_len > 5 && strcmp(index_file_path + index_file_path_len - 4, ":lwi") == 0 )
+        if( index_file_path_len > 5 && strcmp( index_file_path + index_file_path_len - 4, ":lwi" ) == 0 )
             lwi_wpath[nc -= 4] = 0;
-        wcscpy(lwiz_wpath, lwi_wpath);
+        wcscpy( lwiz_wpath, lwi_wpath );
         WIN32_FIND_STREAM_DATA stream_data;
-        HANDLE hFind = FindFirstStreamW(lwi_wpath, 0, &stream_data, 0);
+        HANDLE hFind = FindFirstStreamW( lwi_wpath, 0, &stream_data, 0 );
         if( hFind == INVALID_HANDLE_VALUE ) goto fail_clean;
         do {
-            if( wcsncmp(stream_data.cStreamName, L":lwiz", 5) == 0 ) {
-                wcscpy(lwiz_wpath + nc, stream_data.cStreamName);
-                DeleteFileW(lwiz_wpath);
+            if( wcsncmp( stream_data.cStreamName, L":lwiz", 5 ) == 0 ) {
+                wcscpy( lwiz_wpath + nc, stream_data.cStreamName );
+                DeleteFileW( lwiz_wpath );
             }
-        } while( FindNextStreamW(hFind, &stream_data) );
+        } while( FindNextStreamW( hFind, &stream_data ) );
     }
 
 fail_clean:
     for( unsigned i = 1; ; ++i ) {
-        if( index_file_path_len > 5 && strcmp(index_file_path + index_file_path_len - 4, ":lwi") == 0 ) {
+        if( index_file_path_len > 5 && strcmp( index_file_path + index_file_path_len - 4, ":lwi" ) == 0 ) {
             if( i == 1 ) {
-                sprintf(lwiz_path, "%sz", index_file_path);
+                sprintf( lwiz_path, "%sz", index_file_path );
             } else {
-                sprintf(lwiz_path, "%sz%u", index_file_path, i);
+                sprintf( lwiz_path, "%sz%u", index_file_path, i );
             }
         } else {
             if( i == 1 ) {
-                sprintf(lwiz_path, "%s:lwiz", index_file_path);
+                sprintf( lwiz_path, "%s:lwiz", index_file_path );
             } else {
-                sprintf(lwiz_path, "%s:lwiz%u", index_file_path, i);
+                sprintf( lwiz_path, "%s:lwiz%u", index_file_path, i );
             }
         }
         FILE* fz;
         if( mode == 'r' ) {
-            fz = lw_fopen(lwiz_path, "rb");
+            fz = lw_fopen( lwiz_path, "rb" );
             if( !fz ) goto finish;
-            size_t read = fread(buf, 1, bufsiz, fz);
+            size_t read = fread( buf, 1, bufsiz, fz );
             if( !read ) goto finish;
             ZSTD_inBuffer input = { buf, read, 0 };
             while( input.pos < input.size ) {
                 ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
-                if( ZSTD_isError(ZSTD_decompressStream(dctx, &output, &input)) ) goto finish;
-                fwrite(cbuf, 1, output.pos, fp);
+                if( ZSTD_isError( ZSTD_decompressStream( dctx, &output, &input ) ) ) goto finish;
+                fwrite( cbuf, 1, output.pos, fp );
             }
         } else {
-            fz = lw_fopen(lwiz_path, "wb");
+            fz = lw_fopen( lwiz_path, "wb" );
             if( !fz ) goto finish;
             ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
             for( ;; ) {
                 if( !eof && input.size == 0 ) {
-                    size_t read = fread(buf, 1, bufsiz, fp);
+                    size_t read = fread( buf, 1, bufsiz, fp );
                     if( !read ) eof = 1;
                     input.size = read;
                     input.pos = 0;
                 }
                 for( ;; ) {
                     if ( !eof ) {
-                        if( ZSTD_isError(ZSTD_compressStream(cctx, &output, &input)) ) goto finish;
+                        if( ZSTD_isError( ZSTD_compressStream( cctx, &output, &input ) ) ) goto finish;
                     } else {
-                        size_t ret = ZSTD_endStream(cctx, &output);
-                        if( ZSTD_isError(ret) ) goto finish;
+                        size_t ret = ZSTD_endStream( cctx, &output );
+                        if( ZSTD_isError( ret ) ) goto finish;
                         else {
-                            fwrite(cbuf, 1, output.pos, fz);
+                            fwrite( cbuf, 1, output.pos, fz );
                             if( ret == 0 ) goto finish;
                             else goto nextsg;
                         }
                     }
                     if( output.pos == output.size ) {
-                        fwrite(cbuf, 1, bufsiz, fz);
+                        fwrite( cbuf, 1, bufsiz, fz );
                         goto nextsg;
                     }
                     if( !eof && input.pos == input.size ) {
@@ -2157,31 +2157,31 @@ fail_clean:
                 nextrd:;
             }
         }
-nextsg: fclose(fz);
+nextsg: fclose( fz );
         continue;
-finish: if( fz ) fclose(fz);
+finish: if( fz ) fclose( fz );
         break;
     }
-    fclose(fp);
-    free(index_file_path);
+    fclose( fp );
+    free( index_file_path );
 }
 
-static FILE* create_compressed_index(const char* index_file_path, const char* mode, int cache_compression_level) {
+static FILE* create_compressed_index( const char* index_file_path, const char* mode, int cache_compression_level ) {
     int fds[2];
     const size_t bufsiz = 1ul << 17;
-    if( _pipe(fds, bufsiz, _O_BINARY | _O_NOINHERIT) == -1) {
+    if( _pipe( fds, bufsiz, _O_BINARY | _O_NOINHERIT ) == -1) {
         return NULL;
     }
     if( mode[0] == 'w' ) {
         int t = fds[0]; fds[0] = fds[1]; fds[1] = t;
     }
-    uintptr_t* parg = lw_malloc_zero(sizeof(uintptr_t) * 4);
-    parg[0] = (uintptr_t)strdup(index_file_path);
+    uintptr_t* parg = lw_malloc_zero( sizeof(uintptr_t) * 4 );
+    parg[0] = (uintptr_t)strdup( index_file_path );
     parg[1] = mode[0];
-    parg[2] = (uintptr_t)_fdopen(fds[1], "r+b");
+    parg[2] = (uintptr_t)_fdopen( fds[1], "r+b" );
     parg[3] = cache_compression_level;
-    _beginthread(index_compress_thread, 0, parg);
-    return _fdopen(fds[0], mode);
+    _beginthread( index_compress_thread, 0, parg );
+    return _fdopen( fds[0], mode );
 }
 
 static void create_index
@@ -3564,17 +3564,17 @@ int lwlibav_construct_index
     FILE *index, *indexz;
     if( has_lwi_ext ) {
         index = lw_fopen( opt->file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(opt->file_path, "rb", opt->cache_compression_level);
+        indexz = create_compressed_index( opt->file_path, "rb", opt->cache_compression_level );
     } else if( opt->index_file_path ) {
         index = lw_fopen( opt->index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(opt->index_file_path, "rb", opt->cache_compression_level);
+        indexz = create_compressed_index( opt->index_file_path, "rb", opt->cache_compression_level );
     } else
     {
         char *index_file_path = create_lwi_path ( opt );
         if( !index_file_path )
             return -1;
         index = lw_fopen( index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index(index_file_path, "rb", opt->cache_compression_level);
+        indexz = create_compressed_index( index_file_path, "rb", opt->cache_compression_level );
         free( index_file_path );
     }
     if( index )
