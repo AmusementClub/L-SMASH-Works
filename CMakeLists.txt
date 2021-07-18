@@ -49,7 +49,8 @@ target_link_libraries(vslsmas PRIVATE
     ${FFMPEG_LIBRARIES})
 target_compile_definitions(vslsmas PRIVATE
     "DEFAULT_CACHEDIR=${DEFAULT_CACHEDIR}"
-    XXH_INLINE_ALL)
+    XXH_INLINE_ALL
+    "$<$<C_COMPILER_ID:MSVC>:_CRT_DISABLE_PERFCRIT_LOCKS>")
 target_compile_options(vslsmas PRIVATE
     "$<$<C_COMPILER_ID:MSVC>:/utf-8>"
     "$<$<C_COMPILER_ID:MSVC>:/arch:AVX2>")
