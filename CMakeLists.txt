@@ -53,8 +53,14 @@ target_link_libraries(vslsmas PRIVATE
 target_compile_definitions(vslsmas PRIVATE
     "DEFAULT_CACHEDIR=${DEFAULT_CACHEDIR}"
     XXH_INLINE_ALL
-    "$<$<C_COMPILER_ID:MSVC>:_CRT_DISABLE_PERFCRIT_LOCKS>"
-    "$<$<BOOL:${zstd_FOUND}>:LWI_COMPRESSION>")
+    $<$<BOOL:${WIN32}>:_CRT_DISABLE_PERFCRIT_LOCKS>
+    $<$<BOOL:${MINGW}>:__USE_MINGW_ANSI_STDIO>
+    $<$<BOOL:${zstd_FOUND}>:LWI_COMPRESSION>)
 target_compile_options(vslsmas PRIVATE
-    "$<$<C_COMPILER_ID:MSVC>:/utf-8>"
-    "$<$<C_COMPILER_ID:MSVC>:/arch:AVX2>")
+    $<$<C_COMPILER_ID:MSVC>:/utf-8>
+    $<$<C_COMPILER_ID:MSVC>:/arch:AVX2>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-march=haswell>)
+target_link_options(vslsmas PRIVATE
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wl,-Bsymbolic>
+    $<$<BOOL:${MINGW}>:-static-libgcc>
+    $<$<BOOL:${MINGW}>:-Wl,--add-stdcall-alias>)
