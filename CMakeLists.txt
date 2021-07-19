@@ -10,7 +10,7 @@ string(STRIP ${VCS_TAG} VCS_TAG)
 configure_file(VapourSynth/version.h.in version.h)
 
 find_package(FFMPEG 4.4 REQUIRED)
-find_package(zstd 1.4 REQUIRED)
+find_package(zstd 1.4)
 find_package(xxHash 0.8 REQUIRED)
 
 set(CMAKE_C_STANDARD 99 REQUIRED)
@@ -49,11 +49,12 @@ target_link_directories(vslsmas PRIVATE
     ${FFMPEG_LIBRARY_DIRS})
 target_link_libraries(vslsmas PRIVATE
     ${FFMPEG_LIBRARIES}
-    zstd::libzstd_static)
+    "$<$<BOOL:${zstd_FOUND}>:zstd::libzstd_static>")
 target_compile_definitions(vslsmas PRIVATE
     "DEFAULT_CACHEDIR=${DEFAULT_CACHEDIR}"
     XXH_INLINE_ALL
-    "$<$<C_COMPILER_ID:MSVC>:_CRT_DISABLE_PERFCRIT_LOCKS>")
+    "$<$<C_COMPILER_ID:MSVC>:_CRT_DISABLE_PERFCRIT_LOCKS>"
+    "$<$<BOOL:${zstd_FOUND}>:LWI_COMPRESSION>")
 target_compile_options(vslsmas PRIVATE
     "$<$<C_COMPILER_ID:MSVC>:/utf-8>"
     "$<$<C_COMPILER_ID:MSVC>:/arch:AVX2>")

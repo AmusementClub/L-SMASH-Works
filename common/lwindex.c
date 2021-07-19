@@ -50,7 +50,9 @@ extern "C"
 
 #include <sys/stat.h>
 #include "xxhash.h"
+#ifdef LWI_COMPRESSION
 #include "zstd.h"
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -2058,11 +2060,10 @@ static char *create_lwi_path
     return buf;
 }
 
+#ifdef LWI_COMPRESSION
 static void
 #ifndef _WIN32
 *
-#else
-#define alloca _malloca
 #endif
 index_compress_thread( void* parg ) {
     uintptr_t* args = parg;
@@ -2180,8 +2181,10 @@ finish: if( fz ) fclose( fz );
     if( cctx ) ZSTD_freeCCtx( cctx );
     if( dctx ) ZSTD_freeDCtx( dctx );
 }
+#endif
 
 static FILE* create_compressed_index( const char* index_file_path, const char* mode, int cache_compression_level ) {
+#ifdef LWI_COMPRESSION
     int fds[2];
     const size_t bufsiz = 1ul << 17;
     if(
@@ -2213,6 +2216,10 @@ static FILE* create_compressed_index( const char* index_file_path, const char* m
     pthread_create( &tid, &attr, index_compress_thread, parg );
 #endif
     return fdopen( fds[0], mode );
+#else
+    assert(0);
+    return 0;
+#endif
 }
 
 static void create_index
@@ -2269,13 +2276,19 @@ static void create_index
     if( !opt->no_create_index ) {
         if( opt->index_file_path ) {
             index = lw_fopen( opt->index_file_path, "wb" );
-            indexz = create_compressed_index( opt->index_file_path, "wb", opt->cache_compression_level );
+            if( opt->cache_compression_level )
+                indexz = create_compressed_index( opt->index_file_path, "wb", opt->cache_compression_level );
+            else
+                indexz = index;
         }
         else
         {
             char *index_path = create_lwi_path( opt );
             index = lw_fopen( index_path, "wb" );
-            indexz = create_compressed_index( index_path, "wb", opt->cache_compression_level );
+            if( opt->cache_compression_level )
+                indexz = create_compressed_index( index_path, "wb", opt->cache_compression_level );
+            else
+                indexz = index;
             lw_free( index_path );
         }
     }
@@ -2447,8 +2460,10 @@ static void create_index
                 /* Update active video stream. */
                 if( index )
                 {
+                    int32_t current_pos = ftell( index );
                     fseek( index, video_index_pos, SEEK_SET );
                     fprintf( index, "<ActiveVideoStreamIndex>%+011d</ActiveVideoStreamIndex>\n", pkt.stream_index );
+                    fseek( index, current_pos, SEEK_SET );
                 }
                 memset( video_info, 0, (video_sample_count + 1) * sizeof(video_frame_info_t) );
                 vdhp->ctx                = pkt_ctx;
@@ -2604,8 +2619,10 @@ static void create_index
                 /* Update active audio stream. */
                 if( index )
                 {
+                    int32_t current_pos = ftell( index );
                     fseek( index, audio_index_pos, SEEK_SET );
                     fprintf( index, "<ActiveAudioStreamIndex>%+011d</ActiveAudioStreamIndex>\n", pkt.stream_index );
+                    fseek( index, current_pos, SEEK_SET );
                 }
                 adhp->ctx          = pkt_ctx;
                 adhp->codec_id     = pkt_ctx->codec_id;
@@ -3595,17 +3612,26 @@ int lwlibav_construct_index
     FILE *index, *indexz;
     if( has_lwi_ext ) {
         index = lw_fopen( opt->file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index( opt->file_path, "rb", opt->cache_compression_level );
+        if( opt->cache_compression_level )
+            indexz = create_compressed_index( opt->file_path, "rb", opt->cache_compression_level );
+        else
+            indexz = index;
     } else if( opt->index_file_path ) {
         index = lw_fopen( opt->index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index( opt->index_file_path, "rb", opt->cache_compression_level );
+        if( opt->cache_compression_level )
+            indexz = create_compressed_index( opt->index_file_path, "rb", opt->cache_compression_level );
+        else
+            indexz = index;
     } else
     {
         char *index_file_path = create_lwi_path ( opt );
         if( !index_file_path )
             return -1;
         index = lw_fopen( index_file_path, (opt->force_video || opt->force_audio) ? "r+b" : "rb" );
-        indexz = create_compressed_index( index_file_path, "rb", opt->cache_compression_level );
+        if( opt->cache_compression_level )
+            indexz = create_compressed_index( index_file_path, "rb", opt->cache_compression_level );
+        else
+            indexz = index;
         free( index_file_path );
     }
     if( index )
