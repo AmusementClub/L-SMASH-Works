@@ -46,7 +46,7 @@ jobs:
         echo set(VCPKG_BUILD_TYPE release) >> x64-windows-static-md-rel.cmake
       working-directory: vcpkg/triplets/community
     - name: Build ffmpeg
-      run: .\vcpkg install ffmpeg[core,gpl,avcodec,avformat,swresample,swscale]:x64-windows-static-md-rel zstd:x64-windows-static-md-rel xxHash:x64-windows-static-md-rel --overlay-ports=ports
+      run: .\vcpkg install ffmpeg[core,gpl,version3,avcodec,avformat,swresample,swscale,zlib]:x64-windows-static-md-rel zstd:x64-windows-static-md-rel xxHash:x64-windows-static-md-rel --overlay-ports=ports
       working-directory: vcpkg
     - name: Configure
       run: |
