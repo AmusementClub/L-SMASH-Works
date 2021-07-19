@@ -2087,6 +2087,7 @@ index_compress_thread( void* parg ) {
     }
     ZSTD_inBuffer input = { buf, 0, 0 };
     int eof = 0;
+    const int ads_mode = index_file_path_len > 5 && strcmp( index_file_path + index_file_path_len - 4, ":lwi" ) == 0;
 
 #ifdef _WIN32
     if( mode == 'w' ) {
@@ -2094,7 +2095,7 @@ index_compress_thread( void* parg ) {
         wchar_t lwiz_wpath[MAX_PATH + 1];
         size_t nc = lw_string_to_wchar( CP_UTF8, index_file_path, &lwi_wpath);
         if( !nc-- ) goto fail_clean;
-        if( index_file_path_len > 5 && strcmp( index_file_path + index_file_path_len - 4, ":lwi" ) == 0 )
+        if( ads_mode )
             lwi_wpath[nc -= 4] = 0;
         wcscpy( lwiz_wpath, lwi_wpath );
         WIN32_FIND_STREAM_DATA stream_data;
@@ -2107,13 +2108,17 @@ index_compress_thread( void* parg ) {
             }
         } while( FindNextStreamW( hFind, &stream_data ) );
     }
+fail_clean:
 #endif
 
-fail_clean:
     for( unsigned i = 1; ; ++i ) {
-        if( index_file_path_len > 5 && strcmp( index_file_path + index_file_path_len - 4, ":lwi" ) == 0 ) {
+        (void)i;
+#ifdef _WIN32
+        if( ads_mode ) {
             if( i == 1 ) {
+#endif
                 sprintf( lwiz_path, "%sz", index_file_path );
+#ifdef _WIN32
             } else {
                 sprintf( lwiz_path, "%sz%u", index_file_path, i );
             }
@@ -2124,11 +2129,12 @@ fail_clean:
                 sprintf( lwiz_path, "%s:lwiz%u", index_file_path, i );
             }
         }
+#endif
         FILE* fz;
         if( mode == 'r' ) {
             fz = lw_fopen( lwiz_path, "rb" );
             if( !fz ) goto finish;
-            size_t read = fread( buf, 1, bufsiz, fz );
+contrd:     size_t read = fread( buf, 1, bufsiz, fz );
             if( !read ) goto finish;
             ZSTD_inBuffer input = { buf, read, 0 };
             while( input.pos < input.size ) {
@@ -2136,9 +2142,15 @@ fail_clean:
                 if( ZSTD_isError( ZSTD_decompressStream( dctx, &output, &input ) ) ) goto finish;
                 fwrite( cbuf, 1, output.pos, fp );
             }
+#ifndef _WIN32
+            goto contrd;
+#endif
         } else {
             fz = lw_fopen( lwiz_path, "wb" );
             if( !fz ) goto finish;
+#ifndef _WIN32
+nextsg:
+#endif
             ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
             for( ;; ) {
                 if( !eof && input.size == 0 ) {
@@ -2171,8 +2183,10 @@ fail_clean:
                 nextrd:;
             }
         }
+#ifdef _WIN32
 nextsg: fclose( fz );
         continue;
+#endif
 finish: if( fz ) fclose( fz );
         break;
     }
