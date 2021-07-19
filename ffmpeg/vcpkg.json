@@ -586,6 +586,21 @@
       "dependencies": [
         "zlib"
       ]
+    },
+    "network": {
+      "description": "network support"
+    },
+    "muxers": {
+      "description": "muxers"
+    },
+    "demuxers": {
+      "description": "demuxers"
+    },
+    "encoders": {
+      "description": "encoders"
+    },
+    "decoders": {
+      "description": "decoders"
     }
   }
 }
