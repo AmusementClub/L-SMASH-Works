@@ -3008,7 +3008,7 @@ static void create_index
     cleanup_index_helpers( &indexer, format_ctx );
     if( index )
         fclose( index );
-    if( indexz )
+    if( indexz && indexz != index )
         fclose( indexz );
     if( indicator->close )
         indicator->close( php );
@@ -3021,7 +3021,7 @@ fail_index:
     free( audio_info );
     if( index )
         fclose( index );
-    if( indexz )
+    if( indexz && indexz != index )
         fclose( indexz );
     if( indicator->close )
         indicator->close( php );
@@ -3661,12 +3661,12 @@ int lwlibav_construct_index
         {
             /* Opening and parsing the index file succeeded. */
             fclose( index );
-            fclose( indexz );
+            if( indexz != index ) fclose( indexz );
             lwhp->threads = opt->threads;
             return 0;
         }
         fclose( index );
-        fclose( indexz );
+        if( indexz != index ) fclose( indexz );
     }
     /* Open file. */
     if( !lwhp->file_path )
