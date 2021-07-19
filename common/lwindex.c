@@ -57,6 +57,11 @@ extern "C"
 #include <io.h>
 #include <fcntl.h>
 #include <process.h>
+#else
+#define _GNU_SOURCE
+#include <unistd.h>
+#include <fcntl.h>
+#include <pthread.h>
 #endif
 
 typedef struct
@@ -2053,11 +2058,17 @@ static char *create_lwi_path
     return buf;
 }
 
-static void index_compress_thread( void* parg ) {
+static void
+#ifndef _WIN32
+*
+#else
+#define alloca _malloca
+#endif
+index_compress_thread( void* parg ) {
     uintptr_t* args = parg;
     const char* index_file_path = (const char*)args[0];
     const size_t index_file_path_len = strlen( index_file_path );
-    char* lwiz_path = _malloca( index_file_path_len + 16 );
+    char* lwiz_path = alloca( index_file_path_len + 16 );
     char mode = args[1];
     FILE* fp = (FILE*)args[2];
     int cache_compression_level = args[3];
@@ -2076,6 +2087,7 @@ static void index_compress_thread( void* parg ) {
     ZSTD_inBuffer input = { buf, 0, 0 };
     int eof = 0;
 
+#ifdef _WIN32
     if( mode == 'w' ) {
         wchar_t* lwi_wpath;
         wchar_t lwiz_wpath[MAX_PATH + 1];
@@ -2094,6 +2106,7 @@ static void index_compress_thread( void* parg ) {
             }
         } while( FindNextStreamW( hFind, &stream_data ) );
     }
+#endif
 
 fail_clean:
     for( unsigned i = 1; ; ++i ) {
@@ -2171,7 +2184,15 @@ finish: if( fz ) fclose( fz );
 static FILE* create_compressed_index( const char* index_file_path, const char* mode, int cache_compression_level ) {
     int fds[2];
     const size_t bufsiz = 1ul << 17;
-    if( _pipe( fds, bufsiz, _O_BINARY | _O_NOINHERIT ) == -1) {
+    if(
+#ifdef _WIN32
+#define fdopen _fdopen
+        _pipe( fds, bufsiz, _O_BINARY | _O_NOINHERIT )
+#else
+        pipe2( fds, O_CLOEXEC )
+#endif
+        == -1
+    ) {
         return NULL;
     }
     if( mode[0] == 'w' ) {
@@ -2180,10 +2201,18 @@ static FILE* create_compressed_index( const char* index_file_path, const char* m
     uintptr_t* parg = lw_malloc_zero( sizeof(uintptr_t) * 4 );
     parg[0] = (uintptr_t)strdup( index_file_path );
     parg[1] = mode[0];
-    parg[2] = (uintptr_t)_fdopen( fds[1], "r+b" );
+    parg[2] = (uintptr_t)fdopen( fds[1], "r+b" );
     parg[3] = cache_compression_level;
+#ifdef _WIN32
     _beginthread( index_compress_thread, 0, parg );
-    return _fdopen( fds[0], mode );
+#else
+    pthread_attr_t attr;
+    pthread_t tid;
+    pthread_attr_init( &attr );
+    pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED );
+    pthread_create( &tid, &attr, index_compress_thread, parg );
+#endif
+    return fdopen( fds[0], mode );
 }
 
 static void create_index
