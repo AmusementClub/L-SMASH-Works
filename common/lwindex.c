@@ -2134,7 +2134,7 @@ fail_clean:
         if( mode == 'r' ) {
             fz = lw_fopen( lwiz_path, "rb" );
             if( !fz ) goto finish;
-contrd:     size_t read = fread( buf, 1, bufsiz, fz );
+contrd:;    size_t read = fread( buf, 1, bufsiz, fz );
             if( !read ) goto finish;
             ZSTD_inBuffer input = { buf, read, 0 };
             while( input.pos < input.size ) {
@@ -2149,7 +2149,7 @@ contrd:     size_t read = fread( buf, 1, bufsiz, fz );
             fz = lw_fopen( lwiz_path, "wb" );
             if( !fz ) goto finish;
 #ifndef _WIN32
-nextsg:
+nextsg:;
 #endif
             ZSTD_outBuffer output = { cbuf, bufsiz, 0 };
             for( ;; ) {

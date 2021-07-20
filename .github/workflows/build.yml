@@ -1,9 +1,9 @@
-name: Windows Build
+name: Build
 
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-2019
     defaults:
       run:
@@ -60,3 +60,48 @@ jobs:
       with:
         name: vslsmas-${{matrix.cfg_name}}
         path: build/Release/vslsmas.dll
+  build-linux:
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Checkout overlay ports
+      uses: actions/checkout@v2
+      with:
+        ref: vcpkg-ffmpeg-overlay
+        path: ports
+    - name: Checkout vcpkg
+      uses: actions/checkout@v2
+      with:
+        repository: microsoft/vcpkg
+        ref: master
+        path: vcpkg
+    - name: APT install
+      run: sudo apt -y install nasm ninja-build --no-install-recommends
+    - name: Setup vcpkg
+      run: ./bootstrap-vcpkg.sh
+      working-directory: vcpkg
+    - name: Customize triplet
+      run: |
+        cp x64-linux.cmake community/x64-linux-rel.cmake
+        echo 'set(VCPKG_BUILD_TYPE release)' >> community/x64-linux-rel.cmake
+      working-directory: vcpkg/triplets
+    - name: Build ffmpeg
+      run: vcpkg/vcpkg install 'ffmpeg[core,gpl,version3,avcodec,avformat,swresample,swscale,zlib,demuxers,decoders,dav1d]:x64-linux-rel' xxHash:x64-linux-rel --overlay-ports=ports
+    - name: Configure
+      run: |
+        mkdir build
+        cmake -S. -Bbuild -GNinja -DCMAKE_TOOLCHAIN_FILE=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-linux-rel -DCMAKE_BUILD_TYPE=Release
+    - name: Build
+      run: ninja
+      working-directory: build
+    - name: Strip
+      run: strip -s libvslsmas.so
+      working-directory: build
+    - name: Upload
+      uses: actions/upload-artifact@v2
+      with:
+        name: vslsmas-linux
+        path: build/libvslsmas.so
